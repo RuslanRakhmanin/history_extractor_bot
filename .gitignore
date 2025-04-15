@@ -20,3 +20,4 @@ archives/
 .DS_Store
 Thumbs.db
 .aider*
+known_chats.json

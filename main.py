@@ -1,4 +1,5 @@
 # pylint: disable=line-too-long
+# pylint: disable=logging-fstring-interpolation
 
 # main.py
 import argparse
@@ -9,11 +10,15 @@ import os
 import sys
 import datetime
 from functools import wraps
+import json
+from pathlib import Path
+import html
 
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import (Application, ApplicationBuilder, CommandHandler,
+from telegram.ext import (ApplicationBuilder, CommandHandler, ChatMemberHandler,
                           ContextTypes, Defaults, MessageHandler, filters)
+from telegram.constants import ChatMemberStatus
 
 import bot_logic # Import our processing functions
 
@@ -80,14 +85,121 @@ def admin_only(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
+KNOWN_CHATS_FILE = Path("known_chats.json")
+KNOWN_CHATS = {} # Dictionary to store {chat_id: {"title": "...", "type": "..."}}
+
+def load_known_chats():
+    global KNOWN_CHATS
+    if KNOWN_CHATS_FILE.exists():
+        try:
+            with open(KNOWN_CHATS_FILE, 'r') as f:
+                # Ensure keys are integers after loading from JSON
+                KNOWN_CHATS = {int(k): v for k, v in json.load(f).items()}
+                logger.info(f"Loaded {len(KNOWN_CHATS)} known chats from file.")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Error loading known chats file: {e}")
+            KNOWN_CHATS = {}
+    else:
+         KNOWN_CHATS = {}
+
+def save_known_chats():
+    try:
+        with open(KNOWN_CHATS_FILE, 'w') as f:
+            json.dump(KNOWN_CHATS, f, indent=2)
+    except IOError as e:
+        logger.error(f"Error saving known chats file: {e}")
+
+
+
 # --- Bot Command Handlers ---
+async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tracks chat additions/removals and updates from messages."""
+    chat = update.effective_chat
+    user = update.effective_user # User who caused the update (if applicable)
+
+    if not chat:
+        return # Should not happen for messages/chat member updates
+
+    # Simplest: Update info on every message (can be slightly redundant)
+    if chat.id not in KNOWN_CHATS or KNOWN_CHATS[chat.id]['title'] != chat.title:
+        logger.info(f"Updating/adding chat {chat.id} ('{chat.title}', type: {chat.type}) to known list.")
+        KNOWN_CHATS[chat.id] = {"title": chat.title or f"Chat {chat.id}", "type": chat.type}
+        save_known_chats()
+
+async def track_my_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the bot being added or removed from a chat."""
+    my_member_update = update.my_chat_member
+    if not my_member_update:
+        return
+
+    chat = my_member_update.chat
+    new_status = my_member_update.new_chat_member.status
+
+    logger.info(f"Bot membership status changed in chat {chat.id} ('{chat.title}') to {new_status}")
+
+    if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
+        if chat.id not in KNOWN_CHATS:
+            logger.info(f"Bot added to chat {chat.id} ('{chat.title}', type: {chat.type}). Adding to list.")
+            KNOWN_CHATS[chat.id] = {"title": chat.title or f"Chat {chat.id}", "type": chat.type}
+            save_known_chats()
+    elif new_status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+         if chat.id in KNOWN_CHATS:
+            logger.info(f"Bot removed from chat {chat.id}. Removing from list.")
+            del KNOWN_CHATS[chat.id]
+            save_known_chats()
+
+@admin_only # Assuming you have the admin_only decorator from the previous example
+async def list_groupchats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lists the chats the bot knows it's in, with clickable process links."""
+
+    if not KNOWN_CHATS:
+        await update.message.reply_text("I haven't recorded being in any chats yet.")
+        return
+
+    message_lines = ["<b>Chats I'm aware of:</b>"] # Start with HTML bold
+
+    # Sort by title for better readability, handling cases where title might be missing
+    sorted_chats = sorted(
+        KNOWN_CHATS.items(),
+        key=lambda item: item[1].get('title', f'Unknown Chat {item[0]}').lower()
+    )
+
+    for chat_id, info in sorted_chats:
+        # Safely get title and escape any HTML special characters in it
+        title = html.escape(info.get('title', f'Unknown Chat {chat_id}'))
+        chat_type = info.get('type', '?')
+
+        # Create the command string for this chat
+        command_string = f"/process_history {chat_id}"
+
+        # Format the line using HTML. <code> makes it easy to click/copy.
+        line = (
+            f"- {title} (ID: <code>{chat_id}</code>, Type: {chat_type})\n"
+            f"  └ Run Process: <code>{command_string}</code>"
+        )
+        message_lines.append(line)
+
+    full_message = "\n".join(message_lines)
+
+    # Handle potential message length limits (Telegram limit is 4096 chars)
+    if len(full_message) > 4096:
+        # Find a good place to truncate (e.g., before the last entry's start)
+        cutoff_point = full_message.rfind('\n-', 0, 4050) # Find last '-' entry start before limit
+        if cutoff_point == -1: cutoff_point = 4050 # Fallback if no entry found
+        full_message = full_message[:cutoff_point] + "\n\n<b>... (list truncated due to length)</b>"
+
+    # Send the message using HTML parse mode
+    await update.message.reply_text(full_message, parse_mode='HTML')
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when the command /start is issued."""
     welcome_text = (
         "🤖 Welcome to the Group History Processor Bot!\n\n"
         "Available commands:\n"
         "- /start - Show this help message\n"
-        "- /process_history - Process yesterday's chat history (Admin only)\n\n"
+        "- /process_history - Process yesterday's chat history (Admin only)\n"
+        "- /list_groupchats - List all known group chats\n"
+        "\n"
         "This bot helps archive and analyze group chat history."
     )
     await update.message.reply_text(welcome_text)
@@ -217,6 +329,7 @@ def main():
         help="Target date (YYYY-MM-DD) for processing (CLI mode only, defaults to yesterday)."
     )
     args = parser.parse_args()
+    load_known_chats() # Load known chats at startup
 
     if args.cli:
         # Run the CLI part using asyncio
@@ -235,6 +348,9 @@ def main():
         # Register handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("process_history", process_history_command))
+        application.add_handler(CommandHandler("list_groupchats", list_groupchats_command))
+        application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.UpdateType.MESSAGE & (~filters.COMMAND), track_chats))
+        application.add_handler(ChatMemberHandler(track_my_membership, ChatMemberHandler.MY_CHAT_MEMBER))
         # Add other handlers if needed (e.g., /start, /help)
         application.add_error_handler(error_handler)
 

@@ -1,4 +1,5 @@
 # pylint: disable=line-too-long
+# pylint: disable=logging-fstring-interpolation
 
 # bot_logic.py
 import asyncio
