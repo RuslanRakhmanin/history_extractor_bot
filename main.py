@@ -1,3 +1,5 @@
+# pylint: disable=line-too-long
+
 # main.py
 import argparse
 import asyncio

@@ -19,3 +19,4 @@ archives/
 # OS specific
 .DS_Store
 Thumbs.db
+.aider*

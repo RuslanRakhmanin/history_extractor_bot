@@ -1,3 +1,5 @@
+# pylint: disable=line-too-long
+
 # bot_logic.py
 import asyncio
 import datetime
