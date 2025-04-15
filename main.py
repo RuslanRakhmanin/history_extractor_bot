@@ -79,6 +79,17 @@ def admin_only(func):
     return wrapped
 
 # --- Bot Command Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a welcome message when the command /start is issued."""
+    welcome_text = (
+        "🤖 Welcome to the Group History Processor Bot!\n\n"
+        "Available commands:\n"
+        "- /start - Show this help message\n"
+        "- /process_history - Process yesterday's chat history (Admin only)\n\n"
+        "This bot helps archive and analyze group chat history."
+    )
+    await update.message.reply_text(welcome_text)
+
 @admin_only
 async def process_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /process_history command."""
@@ -220,6 +231,7 @@ def main():
         )
 
         # Register handlers
+        application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("process_history", process_history_command))
         # Add other handlers if needed (e.g., /start, /help)
         application.add_error_handler(error_handler)
