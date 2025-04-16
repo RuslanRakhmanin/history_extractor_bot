@@ -206,44 +206,91 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def process_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /process_history command."""
-    chat_id = update.effective_chat.id
+    """
+    Handles the /process_history command.
+    Processes history for the chat where the command is issued,
+    OR for a specific chat ID provided as an argument.
+
+    Usage:
+    /process_history
+    /process_history <target_chat_id>
+    """
     user_id = update.effective_user.id
+    chat_where_command_was_sent = update.effective_chat.id
+    args = context.args # This list contains strings of arguments after the command
 
-    await update.message.reply_text("Processing request for yesterday's history...")
-    logger.info("Admin %s initiated history processing for chat %s", user_id, chat_id)
+    target_chat_id = None
+    feedback_chat_id = chat_where_command_was_sent # Where to send status messages
 
-    try:
-        # Use the bot instance from context
-        zip_filepath, popular_photos = await bot_logic.process_chat_history(
-            context.bot, chat_id, CONFIG
+    if args:
+        # Arguments were provided
+        try:
+            target_chat_id = int(args[0])
+            logger.info(f"Admin {user_id} requested processing for specific chat ID: {target_chat_id}")
+            await update.message.reply_text(
+                f"Processing request for yesterday's history in chat ID: {target_chat_id}..."
+                f"\n(I'll send results back here in chat {feedback_chat_id})."
+            )
+        except (ValueError, IndexError):
+            logger.warning(f"Invalid argument provided by user {user_id}: {' '.join(args)}")
+            await update.message.reply_text(
+                "Invalid argument. Please provide a valid integer chat ID or no argument.\n"
+                "Usage: `/process_history [chat_id]`"
+            )
+            return # Stop processing
+    else:
+        # No arguments, use the current chat
+        target_chat_id = chat_where_command_was_sent
+        logger.info(f"Admin {user_id} initiated history processing for current chat {target_chat_id}")
+        await update.message.reply_text(
+             f"Processing request for yesterday's history in this chat (ID: {target_chat_id})..."
         )
 
-        result_message = "Processing complete.\n"
-        if zip_filepath:
-            result_message += "- Archive created: Sent below.\n"
-        else:
-            result_message += "- Archive creation failed or no messages processed.\n"
+    # --- Core Logic Execution ---
+    if target_chat_id:
+        try:
+            # Use the bot instance from context
+            zip_filepath, popular_photos = await bot_logic.process_chat_history(
+                context.bot, target_chat_id, CONFIG
+            )
 
-        if popular_photos:
-            result_message += f"- Found {len(popular_photos)} popular photos (saved locally on the server):\n"
-             # Only list filenames for brevity in chat
-            result_message += "\n".join([f"  - {os.path.basename(p)}" for p in popular_photos])
-        else:
-            result_message += "- No photos met the reaction criteria."
+            # --- Sending Results Back ---
+            result_message = f"Processing complete for chat ID {target_chat_id}.\n"
+            if zip_filepath:
+                result_message += f"- Archive created: See below.\n"
+            else:
+                result_message += f"- Archive creation failed or no messages processed.\n"
 
-        await update.message.reply_text(result_message)
+            if popular_photos:
+                result_message += f"- Found {len(popular_photos)} popular photos (saved locally on the server):\n"
+                result_message += "\n".join([f"  - {os.path.basename(p)}" for p in popular_photos])
+            else:
+                result_message += "- No photos met the reaction criteria."
 
-        if zip_filepath and os.path.exists(zip_filepath):
-            try:
-                await update.message.reply_document(document=open(zip_filepath, 'rb'))
-            except Exception as e:
-                logger.error("Failed to send zip file %s: %s", zip_filepath, e)
-                await update.message.reply_text(f"Could not send the archive file: {e}")
+            # Send results to the chat where the command was originally issued
+            await context.bot.send_message(chat_id=feedback_chat_id, text=result_message)
 
-    except Exception as e:
-        logger.exception("Error during /process_history command for chat %s: %s", chat_id, e)
-        await update.message.reply_text(f"An unexpected error occurred: {e}")
+            if zip_filepath and os.path.exists(zip_filepath):
+                try:
+                    # Send the document to the chat where the command was issued
+                    await context.bot.send_document(
+                        chat_id=feedback_chat_id, document=open(zip_filepath, 'rb')
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send zip file {zip_filepath} to chat {feedback_chat_id}: {e}")
+                    await context.bot.send_message(
+                        chat_id=feedback_chat_id, text=f"Could not send the archive file: {e}"
+                    )
+
+        except Exception as e:
+            logger.exception(f"Error during /process_history command for target chat {target_chat_id} "
+                             f"(requested from chat {feedback_chat_id}): {e}")
+            # Get more detailed traceback for logging
+            # tb_str = traceback.format_exc()
+            # logger.error(f"Traceback:\n{tb_str}")
+            await context.bot.send_message(
+                chat_id=feedback_chat_id, text=f"An unexpected error occurred while processing chat {target_chat_id}: {e}"
+            )
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
