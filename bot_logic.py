@@ -6,19 +6,40 @@ import asyncio
 import datetime
 import logging
 import os
-import json
 import zipfile
-from pathlib import Path
+import json
 
+from pathlib import Path
 import pytz
-from telegram import Bot, Message, PhotoSize, ReactionTypeEmoji
-from telegram.constants import MessageEntityType
-from telegram.error import Forbidden, TelegramError
+import re
+from dotenv import load_dotenv
+
+# Telethon Libraries
+from telethon import TelegramClient
+from telethon.tl.types import Message, Photo, ReactionCount # Import specific Telethon types
+from telethon.errors import SessionPasswordNeededError, FloodWaitError, ChatAdminRequiredError, UserNotParticipantError
+from telethon.utils import get_display_name
 
 logger = logging.getLogger(__name__)
 
-# --- Configuration (passed in) ---
-# config will be a dictionary loaded from config.ini
+# --- Load Telethon Config ---
+# Load .env variables for Telethon credentials needed within this module
+load_dotenv()
+API_ID = os.getenv("TELEGRAM_API_ID")
+API_HASH = os.getenv("TELEGRAM_API_HASH")
+SESSION_NAME = os.getenv("TELETHON_SESSION_NAME", "my_telegram_session")
+
+if not API_ID or not API_HASH:
+    logger.critical("TELEGRAM_API_ID or TELEGRAM_API_HASH not found in environment variables.")
+    # Decide how to handle this - exit or raise error? For now, log critical.
+    # sys.exit(1) # Or raise ValueError(...)
+
+try:
+    API_ID = int(API_ID)
+except (ValueError, TypeError):
+    logger.critical("TELEGRAM_API_ID is not a valid integer.")
+    # sys.exit(1) # Or raise ValueError(...)
+
 
 # --- Helper Functions ---
 
@@ -27,106 +48,150 @@ def get_last_full_day_range_utc(tz_name='UTC'):
     try:
         target_tz = pytz.timezone(tz_name)
     except pytz.UnknownTimeZoneError:
-        logger.warning("Unknown timezone '%s', falling back to UTC.", tz_name)
+        logger.warning(f"Unknown timezone '{tz_name}', falling back to UTC.")
         target_tz = pytz.utc
 
     now_tz = datetime.datetime.now(target_tz)
     yesterday_tz = now_tz.date() - datetime.timedelta(days=1)
 
     start_dt_tz = target_tz.localize(datetime.datetime.combine(yesterday_tz, datetime.time.min))
-    end_dt_tz = target_tz.localize(datetime.datetime.combine(yesterday_tz, datetime.time.max))
+    # End is exclusive for Telethon's offset_date, so use start of the next day
+    end_dt_tz = start_dt_tz + datetime.timedelta(days=1)
 
-    # Convert to UTC for Telegram API consistency (most APIs use UTC)
+    # Convert to UTC for Telethon API consistency and filtering
     start_dt_utc = start_dt_tz.astimezone(pytz.utc)
-    # For iterating, we often want up to, but not including, the start of the *next* day
-    # Let's define the end strictly as 23:59:59.999999 for clarity if needed,
-    # but usually filtering < start_of_today works.
-    end_dt_utc = end_dt_tz.astimezone(pytz.utc)
+    end_dt_utc = end_dt_tz.astimezone(pytz.utc) # This is now the *start* of the target day
 
-    logger.info("Target day: %s (%s)", yesterday_tz, tz_name)
-    logger.info("UTC Range: %s to %s", start_dt_utc, end_dt_utc)
+    logger.info(f"Target day: {yesterday_tz} ({tz_name})")
+    logger.info(f"UTC Range: >= {start_dt_utc} and < {end_dt_utc}")
 
-    return start_dt_utc, end_dt_utc, yesterday_tz # Return date for filenames
+    # Return the date for filenames, and the precise start/end UTC datetimes
+    return start_dt_utc, end_dt_utc, yesterday_tz
 
 
-async def get_chat_history_for_day(bot: Bot, chat_id: int, start_dt_utc: datetime.datetime, end_dt_utc: datetime.datetime):
+async def get_chat_history_for_day_telethon(
+    client: TelegramClient,
+    chat_entity, # Can be chat ID, username, etc.
+    start_dt_utc: datetime.datetime,
+    end_dt_utc: datetime.datetime):
     """
-    Attempts to fetch message history for a given period.
-
-    NOTE: Telegram Bot API has limitations fetching *old* history.
-    This function might only retrieve recent messages or fail if the bot lacks permissions
-    or wasn't in the chat during that period. For comprehensive history access,
-    a user bot (e.g., using Telethon) is often required.
+    Fetches message history for a given period using Telethon.
+    Iterates from oldest to newest within the approximate range.
     """
     messages = []
-    last_message_id = None
-    limit = 100 # Max limit per request
+    logger.info(f"Attempting to fetch Telethon history for chat '{chat_entity}' between {start_dt_utc} and {end_dt_utc}")
 
-    logger.info("Attempting to fetch history for chat %d between %s and %s" % (
-        chat_id, start_dt_utc, end_dt_utc) )
+    try:
+        # Ensure client is connected (although usually done outside)
+        if not client.is_connected():
+            await client.connect()
+        if not await client.is_user_authorized():
+            logger.error("Telethon client is not authorized. Please run script interactively first.")
+            # Handle authorization flow if needed (e.g., phone code, password)
+            # This basic implementation assumes an existing, authorized session.
+            return [] # Cannot proceed without authorization
 
-    # This part is tricky with standard Bot API. get_chat_history isn't a direct method.
-    # We might need to iterate using get_chat(chat_id).last_message? Or listen to updates.
-    # Let's *simulate* the outcome assuming we *could* get messages.
-    # In a real scenario with PTB, you'd likely process messages as they arrive
-    # and store them, or use Telethon for historical fetching.
+        # Use iter_messages:
+        # - Set offset_date to the *end* of the period (exclusive). Messages *older* than this will start.
+        # - Use reverse=True to get messages oldest-first, making it easier to stop.
+        # - Set limit=None to fetch all messages in the range (Telethon handles batching).
+        async for message in client.iter_messages(
+            entity=chat_entity,
+            limit=None,
+            offset_date=start_dt_utc, # the meaning of `offset_date` parameters is reversed, so fetch messages *after* the start of the prev day (UTC)
+            reverse=True             # Start from older messages towards newer ones
+        ):
+            # client.iter_messages(entity=chat_entity, limit=None, offset_date=end_dt_utc, reverse=True)
+            # Message dates are timezone-aware (usually UTC)
+            msg_date_utc = message.date
 
-    # --- Placeholder for Actual Fetching Logic ---
-    # This is where you'd implement the actual message retrieval.
-    # For demonstration, we'll return an empty list and log a warning.
-    # Example using a hypothetical (or Telethon-like) approach:
-    #
-    # try:
-    #     async for message in bot.iter_history(chat_id, start_date=end_dt_utc, end_date=start_dt_utc):
-    #         # Note: iter_history might not exist in PTB Bot API wrapper like this.
-    #         # This usually requires a user client library.
-    #         if start_dt_utc <= message.date <= end_dt_utc:
-    #             messages.append(message)
-    #         elif message.date < start_dt_utc:
-    #             break # Stop fetching older messages
-    # except Exception as e:
-    #     logger.error(f"Error fetching history for chat {chat_id}: {e}")
-    #     # Handle specific errors like chat not found, bot kicked, etc.
+            # Check if the message date is within our *precise* desired range
+            if msg_date_utc >= end_dt_utc:
+                # This message is too new (shouldn't happen often with offset_date but good check)
+                continue
+            if msg_date_utc < start_dt_utc:
+                # This message is older than our start date. Since we reverse, we can stop.
+                # However, offset_date should handle this. Let's double check logic.
+                # If reverse=True, messages older than offset_date appear first.
+                # The iteration should ideally *start* near start_dt_utc.
+                # Let's filter strictly >= start_dt_utc
+                pass # Skip messages before the start time
 
-    logger.warning("History fetching for chat %d is placeholder logic. "
-                   "Standard Bot API has limitations. Consider using Telethon for full history access.", chat_id)
-    # Return an empty list for now to allow processing logic to run
-    return []
-    # --- End Placeholder ---
+            # If we are here, the message is within the target day [start_dt_utc, end_dt_utc)
+            if start_dt_utc <= msg_date_utc < end_dt_utc:
+                messages.append(message)
+            elif msg_date_utc >= end_dt_utc:
+                # If somehow we get a message newer than our range end (after starting), stop.
+                break
 
 
-def count_message_reactions(message: Message, like_emojis: list | None = None) -> int:
-    """Counts reactions on a message, optionally filtering by specific emojis."""
-    if not message.reactions:
+        logger.info(f"Fetched {len(messages)} messages using Telethon for chat '{chat_entity}' on target day.")
+        return messages
+
+    except (ChatAdminRequiredError, UserNotParticipantError):
+        logger.error(f"Cannot access chat '{chat_entity}'. Bot/User may lack permissions or not be a participant.")
+        return []
+    except ValueError as e:
+        logger.error(f"Invalid chat entity '{chat_entity}': {e}. Is the ID/username correct?")
+        return []
+    except FloodWaitError as e:
+        logger.warning(f"Telegram Flood Wait: Sleeping for {e.seconds} seconds.")
+        await asyncio.sleep(e.seconds + 1)
+        # Potentially retry logic could be added here, but for now, just return empty
+        return []
+    except Exception as e:
+        logger.exception(f"Unexpected error fetching Telethon history for chat '{chat_entity}': {e}")
+        return []
+
+
+def count_telethon_message_reactions(message: Message, like_emojis: list | None = None) -> int:
+    """Counts reactions on a Telethon message, optionally filtering."""
+    if not message.reactions or not message.reactions.results:
         return 0
 
     total_count = 0
     if like_emojis:
-        # Count only specified "like" emojis
         allowed_emojis_set = set(like_emojis)
-        for reaction in message.reactions.reactions:
-            if isinstance(reaction.type, ReactionTypeEmoji) and reaction.type.emoji in allowed_emojis_set:
-                total_count += reaction.count
+        for reaction_count in message.reactions.results:
+            # Accessing emoji requires checking the reaction type
+            # For ReactionCount, reaction is the emoji string itself
+            if isinstance(reaction_count, ReactionCount) and reaction_count.reaction in allowed_emojis_set:
+                total_count += reaction_count.count
+            # TODO: Handle ReactionCustomEmoji if needed
     else:
         # Count all reactions
-        for reaction in message.reactions.reactions:
-            total_count += reaction.count
+        for reaction_count in message.reactions.results:
+            total_count += reaction_count.count
     return total_count
+
+
+async def download_telethon_file(client: TelegramClient, message_media, path: Path):
+    """Downloads media from a Telethon message to the specified path."""
+    try:
+        await client.download_media(message_media, file=path)
+        return path
+    except Exception as e:
+        # Catch specific Telethon errors if needed
+        logger.exception(f"Unexpected error downloading media via Telethon: {e}")
+        return None
 
 # --- Main Processing Function ---
 
 async def process_chat_history(
-    bot: Bot,
-    chat_id: int,
+    chat_id_or_username: int | str,
     config: dict,
-    target_date_override: datetime.date | None = None # Allow specific date for CLI/testing
+    target_date_override: datetime.date | None = None
     ) -> tuple[str | None, list[str]]:
     """
-    Fetches history, processes messages, saves popular photos, and creates a zip archive.
+    Fetches history using Telethon, processes messages, saves popular photos, and creates a zip archive.
 
     Returns:
         tuple: (path_to_zip_file or None, list_of_saved_popular_photo_paths)
     """
+    if not API_ID or not API_HASH:
+        logger.error("Telethon API_ID or API_HASH not configured. Cannot process history.")
+        return None, []
+
     tz_name = config['History']['timezone']
     min_reactions = int(config['Processing']['min_reactions_for_picture'])
     download_dir = Path(config['Processing']['download_dir'])
@@ -134,7 +199,7 @@ async def process_chat_history(
     like_emojis_str = config['Processing']['like_emojis'].strip()
     like_emojis = [e.strip() for e in like_emojis_str.split(',') if e.strip()] if like_emojis_str else None
 
-    # Ensure directories exist
+    # Ensure output directories exist
     download_dir.mkdir(parents=True, exist_ok=True)
     archive_dir.mkdir(parents=True, exist_ok=True)
 
@@ -146,20 +211,37 @@ async def process_chat_history(
         except pytz.UnknownTimeZoneError:
             target_tz = pytz.utc
         start_dt_tz = target_tz.localize(datetime.datetime.combine(target_day, datetime.time.min))
-        end_dt_tz = target_tz.localize(datetime.datetime.combine(target_day, datetime.time.max))
+        end_dt_tz = start_dt_tz + datetime.timedelta(days=1) # Exclusive end
         start_dt_utc = start_dt_tz.astimezone(pytz.utc)
         end_dt_utc = end_dt_tz.astimezone(pytz.utc)
-        logger.info("Processing specified date: %s (%s)", target_day, tz_name)
+        logger.info(f"Processing specified date: {target_day} ({tz_name})")
     else:
         start_dt_utc, end_dt_utc, target_day = get_last_full_day_range_utc(tz_name)
 
-    # 2. Fetch History (Placeholder - see function comment)
-    messages = await get_chat_history_for_day(bot, chat_id, start_dt_utc, end_dt_utc)
+    # 2. Fetch History using Telethon
+    messages = []
+    telethon_client = TelegramClient(SESSION_NAME, API_ID, API_HASH, system_version="4.16.30-vxCUSTOM") # Use session name
+
+    try:
+        logger.info(f"Connecting Telethon client (Session: {SESSION_NAME})...")
+        # Context manager handles connect/disconnect
+        async with telethon_client as client:
+            messages = await get_chat_history_for_day_telethon(
+                client, chat_id_or_username, start_dt_utc, end_dt_utc
+            )
+    except SessionPasswordNeededError:
+        logger.error("Telethon login failed: 2FA Password needed. Run script interactively first.")
+        # Cannot proceed without interactive password entry
+        return None, []
+    except Exception as e:
+        logger.exception(f"Failed to initialize or run Telethon client: {e}")
+        return None, []
+    # Client is automatically disconnected here by 'async with'
 
     if not messages:
-        logger.warning("No messages found or fetched for chat %d on %s.", chat_id, target_day)
-        # Depending on requirements, you might still want an empty zip or just return
-        # return None, [] # Option: return nothing if no messages
+        logger.warning(f"No messages found or fetched via Telethon for chat '{chat_id_or_username}' on {target_day}.")
+        # Decide if an empty zip should be created or just return
+        return None, []
 
     # 3. Process Messages and Find Popular Photos
     processed_data = []
@@ -167,111 +249,147 @@ async def process_chat_history(
     photo_download_tasks = []
     photo_details = {} # Store details needed after download
 
-    logger.info("Processing %d messages for chat %d on %s...", len(messages), chat_id, target_day)
-    for msg in messages:
-        if not isinstance(msg, Message): # Ensure it's a message object
-            continue
+    logger.info(f"Processing {len(messages)} Telethon messages for chat '{chat_id_or_username}' on {target_day}...")
+    # Need the client again for downloads, let's reconnect briefly if needed, or structure differently
+    # Reconnecting for downloads might be inefficient. Better to do downloads within the 'async with' block?
+    # Let's restructure slightly to download within the fetch block or pass client
 
-        timestamp = msg.date.isoformat() if msg.date else "Unknown Time"
-        sender = msg.from_user.username or msg.from_user.full_name if msg.from_user else "Unknown Sender"
-        msg_text = msg.text or msg.caption or ""
-        reaction_count = count_message_reactions(msg, like_emojis)
+    # --- Option: Re-Connect for downloads (simpler structure for now) ---
+    # This is less efficient but separates concerns slightly
+    download_client = TelegramClient(SESSION_NAME, API_ID, API_HASH, system_version="4.16.30-vxCUSTOM")
+    try:
+        async with download_client as dl_client:
+            if not await dl_client.is_user_authorized():
+                raise ValueError("Client not authorized for downloads") # Should be authorized already
 
-        message_info = {
-            "message_id": msg.message_id,
-            "sender": sender,
-            "timestamp": timestamp,
-            "text": msg_text,
-            "reactions": reaction_count,
-            "photos": []
-        }
+            for msg in messages:
+                if not isinstance(msg, Message):
+                    continue
 
-        if msg.photo:
-            # Get the largest photo size
-            photo: PhotoSize = msg.photo[-1]
-            photo_file_id = photo.file_id
-            photo_unique_id = photo.file_unique_id # Good for naming
-            photo_filename = f"{target_day}_{chat_id}_{msg.message_id}_{photo_unique_id}.jpg"
-            photo_rel_path = f"photos/{photo_filename}" # Path within the zip
-            message_info["photos"].append({"file_id": photo_file_id, "zip_path": photo_rel_path})
+                timestamp = msg.date.isoformat()
+                sender_obj = await msg.get_sender() # Need to fetch sender info
+                sender_name = get_display_name(sender_obj) if sender_obj else "Unknown Sender"
+                msg_text = msg.text or "" # Telethon uses msg.text for caption too
+                reaction_count = count_telethon_message_reactions(msg, like_emojis)
 
-            if reaction_count >= min_reactions:
-                local_save_path = download_dir / photo_filename
-                # Schedule download task
-                photo_details[photo_file_id] = {"local_path": local_save_path, 
-                                                "zip_path": photo_rel_path}
-                photo_download_tasks.append(
-                    download_file(bot, photo_file_id, local_save_path)
-                )
-                logger.info("Photo %s from msg %d has %d reactions (>= %d), scheduling download.", 
-                            photo_file_id, msg.message_id, reaction_count, min_reactions)
+                message_info = {
+                    "message_id": msg.id,
+                    "sender": sender_name,
+                    "sender_id": sender_obj.id if sender_obj else None,
+                    "timestamp": timestamp,
+                    "text": msg_text,
+                    "reactions": reaction_count,
+                    "photos": []
+                }
+
+                if msg.photo and isinstance(msg.photo, Photo):
+                    # Telethon message.photo is the Photo object directly (largest size usually)
+                    photo_id = msg.photo.id
+                    # Create a unique-enough filename
+                    # Access hash might change, use photo_id and message_id
+                    photo_filename = f"{target_day}_{msg.chat_id}_{msg.id}_{photo_id}.jpg"
+                    photo_rel_path = f"photos/{photo_filename}"
+                    message_info["photos"].append({"photo_id": photo_id, "zip_path": photo_rel_path})
+
+                    if reaction_count >= min_reactions:
+                        local_save_path = download_dir / photo_filename
+                        # Schedule download task using the download_client
+                        photo_details[msg.id] = {"local_path": local_save_path, "zip_path": photo_rel_path, "media": msg.photo}
+                        # Use partial or lambda to pass arguments to the download coroutine
+                        task = download_telethon_file(dl_client, msg.photo, local_save_path)
+                        photo_download_tasks.append(task)
+                        logger.info(f"Photo msg {msg.id} has {reaction_count} reactions (>= {min_reactions}), scheduling download.")
+
+                processed_data.append(message_info)
+
+             # 4. Download Popular Photos Concurrently
+            downloaded_files_info = {}
+            if photo_download_tasks:
+                logger.info(f"Starting download of {len(photo_download_tasks)} popular photos via Telethon...")
+                results = await asyncio.gather(*photo_download_tasks, return_exceptions=True)
+
+                # Match results back to original info (this mapping is tricky with gather)
+                # Iterate through original details and check results based on path?
+                for msg_id, details in photo_details.items():
+                    local_path = details["local_path"]
+                    # Find the result corresponding to this path (or index if tasks kept order)
+                    # This assumes results maintain order, which gather *usually* does
+                    # A more robust way might involve returning (path, success_flag) from download
+                    idx = -1
+                    for i, task in enumerate(photo_download_tasks):
+                        # Inspecting the task details to match is hard. Assume order for now.
+                        # Or match based on the `local_path` passed to the task if possible.
+                        # Let's find the corresponding result by checking the target path
+                        # This relies on download_telethon_file returning the path on success
+                        potential_path = None
+                        task_coro = task # asyncio.gather returns results in order
+                        # Find the corresponding result by iterating through results
+                        # This is still clumsy. A better approach is needed if order isn't guaranteed
+                        # or if we need to correlate failures better.
+
+                    # Simplistic approach: Assume results are ordered and check for Exceptions
+                    try:
+                        # Find index based on details (requires tasks to be identifiable or ordered)
+                        # For now, let's just iterate results and log based on the path returned
+                        pass # This correlation needs improvement
+
+                    except Exception as gather_e:
+                        logger.error(f"Error processing download result: {gather_e}")
 
 
-        processed_data.append(message_info)
+                # Simpler logging based on successful results:
+                successful_downloads = [str(res) for res in results if isinstance(res, Path) and res.exists()]
+                failed_downloads = [str(details['local_path']) for i, details in enumerate(photo_details.values()) 
+                                    if isinstance(results[i], Exception)]
 
-    # 4. Download Popular Photos Concurrently
-    downloaded_files_info = {} # Map file_id to actual downloaded path
-    if photo_download_tasks:
-        logger.info("Starting download of %d popular photos...", len(photo_download_tasks))
-        results = await asyncio.gather(*photo_download_tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            file_id = photo_download_tasks[i].__self__.file_id # Access file_id from partial/coroutine if needed
-            details = photo_details[file_id]
-            if isinstance(result, Exception):
-                logger.error("Failed to download photo %s: %s", file_id, result)
-            elif result: # result should be the path if successful
-                logger.info("Successfully downloaded photo %s to %s", file_id, result)
-                popular_photo_paths.append(str(result))
-                downloaded_files_info[file_id] = {"local_path": result, "zip_path": details["zip_path"]}
-            else:
-                logger.warning("Download task for %s completed but returned no path.", file_id)
+                popular_photo_paths.extend(successful_downloads)
+                for path_str in successful_downloads:
+                    # Find corresponding details to store zip_path
+                    for msg_id_d, details_d in photo_details.items():
+                        if str(details_d["local_path"]) == path_str:
+                            downloaded_files_info[msg_id_d] = {"local_path": Path(path_str), "zip_path": details_d["zip_path"]}
+                            break
+
+                if failed_downloads:
+                    logger.warning(f"Failed to download {len(failed_downloads)} popular photos: {failed_downloads}")
+
+
+    except ValueError as ve: # Catch the "Client not authorized" error
+        logger.error(f"Telethon authorization error during downloads: {ve}")
+        # Cannot proceed with downloads
+    except Exception as e:
+        logger.exception(f"Error during Telethon download phase: {e}")
+    # Download client automatically disconnected
 
     # 5. Create ZIP Archive
-    zip_filename = f"chat_history_{chat_id}_{target_day}.zip"
+    zip_filename = f"chat_history_{chat_id_or_username}_{target_day}.zip"
+    # Sanitize chat_id_or_username if it's a string like '@channelname'
+    safe_chat_ref = re.sub(r'[^\w\-]+', '_', str(chat_id_or_username))
+    zip_filename = f"chat_history_{safe_chat_ref}_{target_day}.zip"
     zip_filepath = archive_dir / zip_filename
 
-    logger.info("Creating archive: %s", zip_filepath)
+    logger.info(f"Creating archive: {zip_filepath}")
     try:
         with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Add messages summary (e.g., JSON or TXT)
             messages_json_str = json.dumps(processed_data, indent=2, ensure_ascii=False)
             zf.writestr("messages.json", messages_json_str)
             logger.debug("Added messages.json to zip.")
 
-            # Add ALL photos mentioned in messages (if they were downloaded for popularity or need separate download)
-            # For simplicity here, we only add the *popular* ones we already downloaded.
-            # To add ALL photos, you'd need to download them even if not popular,
-            # potentially making the process much longer.
-
-            for file_id, info in downloaded_files_info.items():
+            # Add downloaded popular photos
+            for msg_id_f, info in downloaded_files_info.items():
                 local_path = info["local_path"]
                 zip_path = info["zip_path"]
                 if local_path.exists():
                     zf.write(local_path, arcname=zip_path)
-                    logger.debug("Added %s as %s to zip.", local_path, zip_path)
+                    logger.debug(f"Added {local_path} as {zip_path} to zip.")
                 else:
-                    logger.warning("File %s for photo %s not found for zipping.", local_path, file_id)
+                    logger.warning(f"File {local_path} for popular photo msg {msg_id_f} not found for zipping.")
 
-        logger.info("Successfully created archive: %s", zip_filepath)
+        logger.info(f"Successfully created archive: {zip_filepath}")
         return str(zip_filepath), popular_photo_paths
 
     except Exception as e:
-        logger.exception("Failed to create zip file %s: %s", zip_filepath, e)
-        return None, popular_photo_paths # Return paths even if zip fails
-
-async def download_file(bot: Bot, file_id: str, path: Path):
-    """Downloads a file using its file_id to the specified path."""
-    try:
-        file = await bot.get_file(file_id)
-        await file.download_to_drive(custom_path=path)
-        return path
-    except Forbidden:
-        logger.error("Forbidden: Bot might not have permission to download file %s.", file_id)
-        # Raise or return None/False? Return None for gather compatibility
-        return None
-    except TelegramError as e:
-        logger.error("TelegramError downloading file %s: %s", file_id, e)
-        return None
-    except Exception as e:
-        logger.exception("Unexpected error downloading file %s: %s", file_id, e)
-        return None
+        logger.exception(f"Failed to create zip file {zip_filepath}: {e}")
+        # Return paths even if zip fails, but None for zip path
+        return None, popular_photo_paths
+    

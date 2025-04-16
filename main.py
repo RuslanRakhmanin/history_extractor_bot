@@ -19,6 +19,7 @@ from telegram import Update
 from telegram.ext import (ApplicationBuilder, CommandHandler, ChatMemberHandler,
                           ContextTypes, Defaults, MessageHandler, filters)
 from telegram.constants import ChatMemberStatus
+import telegram.error # For error handling
 
 import bot_logic # Import our processing functions
 
@@ -28,6 +29,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING) # Reduce library noise
+logging.getLogger("telethon").setLevel(logging.INFO) # Reduce library noise
 logger = logging.getLogger(__name__)
 
 # --- Load Configuration ---
@@ -198,7 +200,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Available commands:\n"
         "- /start - Show this help message\n"
         "- /process_history - Process yesterday's chat history (Admin only)\n"
-        "- /list_groupchats - List all known group chats\n"
+        "- /list_groupchats - List all known group chats (Admin only)\n"
         "\n"
         "This bot helps archive and analyze group chat history."
     )
@@ -248,13 +250,15 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
 
     # --- Core Logic Execution ---
     if target_chat_id:
+        processing_task = asyncio.create_task(
+            bot_logic.process_chat_history(target_chat_id, CONFIG)
+        )
+        # Wait for the task to complete
         try:
-            # Use the bot instance from context
-            zip_filepath, popular_photos = await bot_logic.process_chat_history(
-                context.bot, target_chat_id, CONFIG
-            )
-
+            zip_filepath, popular_photos = await processing_task
             # --- Sending Results Back ---
+            result_message = f"Telethon processing complete for chat: {target_chat_id}.\n"
+
             result_message = f"Processing complete for chat ID {target_chat_id}.\n"
             if zip_filepath:
                 result_message += f"- Archive created: See below.\n"
@@ -276,6 +280,11 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
                     await context.bot.send_document(
                         chat_id=feedback_chat_id, document=open(zip_filepath, 'rb')
                     )
+
+                except telegram.error.NetworkError as ne:
+                    logger.error(f"Network error sending zip file {zip_filepath} to {feedback_chat_id}: {ne}")
+                    await context.bot.send_message(chat_id=feedback_chat_id, text=f"Network error sending archive: {ne}. File saved locally.")
+
                 except Exception as e:
                     logger.error(f"Failed to send zip file {zip_filepath} to chat {feedback_chat_id}: {e}")
                     await context.bot.send_message(
@@ -307,7 +316,7 @@ async def run_cli_processing(args):
         sys.exit(1)
 
     try:
-        chat_id = int(args.chat_id)
+        target_chat_entity = int(args.chat_id)
     except ValueError:
         print(f"Error: Invalid chat ID '{args.chat_id}'. Must be an integer.", file=sys.stderr)
         sys.exit(1)
@@ -320,17 +329,13 @@ async def run_cli_processing(args):
             print(f"Error: Invalid date format '{args.date}'. Use YYYY-MM-DD.", file=sys.stderr)
             sys.exit(1)
 
-    # Need a bot instance to make API calls
-    defaults = Defaults()
-    # Use ApplicationBuilder just to get a configured bot instance easily
-    cli_app = ApplicationBuilder().token(CONFIG['Bot']['token']).defaults(defaults).build()
-    bot = cli_app.bot # Get the bot instance
-
-    print(f"Processing history for chat ID: {chat_id} on date: {target_date or 'yesterday'}")
+    print(f"Processing history for chat ID: {target_chat_entity} on date: {target_date or 'yesterday'}")
     try:
+        # Directly call the bot_logic function which now uses Telethon
         zip_filepath, popular_photos = await bot_logic.process_chat_history(
-            bot, chat_id, CONFIG, target_date_override=target_date
+            target_chat_entity, CONFIG, target_date_override=target_date
         )
+
 
         print("\nProcessing Results:")
         if zip_filepath:
@@ -346,15 +351,8 @@ async def run_cli_processing(args):
             print("- No photos met the reaction criteria.")
 
     except Exception as e:
-        logger.exception("Error during CLI processing for chat %s: %s", chat_id, e)
+        logger.exception("Error during CLI processing for chat %s: %s", target_chat_entity, e)
         print(f"\nAn error occurred: {e}", file=sys.stderr)
-    finally:
-        # Gracefully shutdown the underlying httpx client if Application was used
-        if hasattr(cli_app, '_updater') and cli_app._updater: # Check internal structure might change
-            await cli_app.shutdown()
-        elif hasattr(cli_app, 'shutdown'): # More direct if available
-            await cli_app.shutdown()
-
 
 
 def main():
