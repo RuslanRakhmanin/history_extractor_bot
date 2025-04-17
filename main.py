@@ -199,7 +199,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 Welcome to the Group History Processor Bot!\n\n"
         "Available commands:\n"
         "- /start - Show this help message\n"
-        "- /process_history - Process yesterday's chat history (Admin only)\n"
+        "- /process_history <groupname> - Process yesterday's chat history (Admin only)\n"
+        "- /process_history <groupname> <YYYY-MM-DD> - Process chat history for a date (Admin only)\n"
         "- /list_groupchats - List all known group chats (Admin only)\n"
         "\n"
         "This bot helps archive and analyze group chat history."
@@ -215,31 +216,36 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
 
     Usage:
     /process_history
-    /process_history <target_chat_id>
+    /process_history <target_chat_id_or_name>
+    /process_history <target_chat_id_or_name> <date>
     """
     user_id = update.effective_user.id
     chat_where_command_was_sent = update.effective_chat.id
     args = context.args # This list contains strings of arguments after the command
 
     target_chat_id = None
+    target_date = None
     feedback_chat_id = chat_where_command_was_sent # Where to send status messages
 
     if args:
         # Arguments were provided
-        try:
-            target_chat_id = int(args[0])
-            logger.info(f"Admin {user_id} requested processing for specific chat ID: {target_chat_id}")
-            await update.message.reply_text(
-                f"Processing request for yesterday's history in chat ID: {target_chat_id}..."
-                f"\n(I'll send results back here in chat {feedback_chat_id})."
-            )
-        except (ValueError, IndexError):
-            logger.warning(f"Invalid argument provided by user {user_id}: {' '.join(args)}")
-            await update.message.reply_text(
-                "Invalid argument. Please provide a valid integer chat ID or no argument.\n"
-                "Usage: `/process_history [chat_id]`"
-            )
-            return # Stop processing
+        target_chat_id = args[0]
+        logger.info(f"Admin {user_id} requested processing for specific chat ID: {target_chat_id}")
+        await update.message.reply_text(
+            f"Processing request for yesterday's history in chat ID: {target_chat_id}..."
+            f"\n(I'll send results back here in chat {feedback_chat_id})."
+        )
+
+        if len(args) > 1:
+            # Additional arguments were provided, assume it's a date
+            target_date = args[1]
+            try:
+                target_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+            except ValueError:
+                await update.message.reply_text(
+                    f"Error: Invalid date format '{target_date}'. Use YYYY-MM-DD."
+                )
+
     else:
         # No arguments, use the current chat
         target_chat_id = chat_where_command_was_sent
@@ -251,7 +257,7 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
     # --- Core Logic Execution ---
     if target_chat_id:
         processing_task = asyncio.create_task(
-            bot_logic.process_chat_history(target_chat_id, CONFIG)
+            bot_logic.process_chat_history(target_chat_id, CONFIG, target_date_override=target_date)
         )
         # Wait for the task to complete
         try:
@@ -315,11 +321,12 @@ async def run_cli_processing(args):
         print("Error: --chat-id is required for CLI mode.", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        target_chat_entity = int(args.chat_id)
-    except ValueError:
-        print(f"Error: Invalid chat ID '{args.chat_id}'. Must be an integer.", file=sys.stderr)
-        sys.exit(1)
+    # try:
+    #     target_chat_entity = int(args.chat_id)
+    # except ValueError:
+    #     print(f"Error: Invalid chat ID '{args.chat_id}'. Must be an integer.", file=sys.stderr)
+    #     sys.exit(1)
+    target_chat_entity = args.chat_id
 
     target_date = None
     if args.date:

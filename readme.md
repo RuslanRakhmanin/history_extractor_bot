@@ -68,7 +68,7 @@ A Python-based Telegram bot and CLI tool designed to process message history fro
     *   Telethon needs to log in as your user account the *first time* it runs or if the session expires. It will ask for your phone number, the code sent via Telegram, and your 2FA password (if enabled) **directly in the console where the script is running.**
     *   **It's recommended to run the CLI mode once interactively to complete this authorization before running the bot as a background service:**
         ```bash
-        python main.py --cli --chat-id <any_valid_chat_id>
+        python main.py --cli --chat-id <any_valid_chat_id_or_groupname>
         ```
     *   Follow the prompts in your terminal. Once authorized, Telethon will create a `.session` file (named according to `TELETHON_SESSION_NAME` in your `.env`) and use it for subsequent logins.
 
@@ -92,7 +92,7 @@ Send these commands to the bot in any chat it's in, or directly to the bot (if p
     *   Processes the history of the chat where the command is issued.
     *   Sends status updates and the resulting ZIP archive back to this chat.
 *   `/process_history <chat_id>`
-    *   Processes the history for the specified chat ID (numeric).
+    *   Processes the history for the specified chat ID (numeric) or group name.
     *   The user account associated with your Telethon API keys *must* be a member of the target chat.
     *   Sends status updates and the resulting ZIP archive back to the chat where the command was originally issued.
 *   `/listchats`
@@ -107,7 +107,7 @@ python main.py --cli --chat-id <chat_id> [--date YYYY-MM-DD]
 ```
 
 *   `--cli`: Required to run in CLI mode.
-*   `--chat-id <chat_id>`: **Required.** Specifies the target chat ID (numeric) (e.g., `-100123456789`).
+*   `--chat-id <chat_id>`: **Required.** Specifies the target chat ID (numeric) or group name (e.g., `-100123456789` or `group_name`).
 *   `--date <YYYY-MM-DD>`: Optional. Process history for a specific date instead of yesterday.
 
 **Example:**
@@ -117,7 +117,7 @@ python main.py --cli --chat-id <chat_id> [--date YYYY-MM-DD]
 python main.py --cli --chat-id -100123456789
 
 # Process history for -100123456789 for 2023-10-26
-python main.py --cli --chat-id -100123456789 --date 2023-10-26
+python main.py --cli --chat-id group_name --date 2023-10-26
 ```
 
 Output (paths to archives/photos, status messages) will be printed to the console.
