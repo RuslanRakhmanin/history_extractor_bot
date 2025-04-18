@@ -69,9 +69,9 @@ def load_configuration():
         # Get server_url safely with fallback to empty string
         server_url = config.get('Processing', 'server_url', fallback='')
         if server_url:
-            config['HISTORY_ENDPOINT'] = server_url + '/process_history'
+            config['Internal']['HISTORY_ENDPOINT'] = server_url + '/process_history'
         else:
-            config['HISTORY_ENDPOINT'] = ''
+            config['Internal']['HISTORY_ENDPOINT'] = ''
 
     except Exception as e:
         logger.critical("Error loading or parsing config.ini: %s", e)
@@ -81,6 +81,7 @@ def load_configuration():
 
 CONFIG = load_configuration()
 ADMIN_IDS = CONFIG['Internal']['admin_id_set']
+HISTORY_ENDPOINT = CONFIG['Internal']['HISTORY_ENDPOINT']
 
 # --- Admin Check Decorator ---
 def admin_only(func):
@@ -304,7 +305,7 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
                             json_data = json_file.read().decode('utf-8')
                     
                     # Send raw JSON to server
-                    send_raw_history_to_server(CONFIG['HISTORY_ENDPOINT'], json_data)
+                    send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
 
 
                 except telegram.error.NetworkError as ne:
@@ -421,7 +422,7 @@ async def run_cli_processing(args):
                         json_data = json_file.read().decode('utf-8')
                 
                 # Send raw JSON to server
-                send_raw_history_to_server(CONFIG['HISTORY_ENDPOINT'], json_data)
+                send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
 
         if popular_photos:
             print(f"- Found {len(popular_photos)} popular photos saved locally:")
