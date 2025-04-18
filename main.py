@@ -13,6 +13,7 @@ from functools import wraps
 import json
 from pathlib import Path
 import html
+import requests
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -61,6 +62,7 @@ def load_configuration():
         # admin_id_str = config['Admins']['admin_ids']
         admin_ids = {int(admin_id.strip()) for admin_id in admin_id_str.split(',') if admin_id.strip()}
         config['Internal'] = {'admin_id_set': admin_ids} # Store parsed set
+        config['HISTORY_ENDPOINT'] = f"{config['server_url']}/process_history"
 
     except Exception as e:
         logger.critical("Error loading or parsing config.ini: %s", e)
@@ -312,6 +314,50 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Log Errors caused by Updates."""
     logger.error("Update %s caused error %s", update, context.error, exc_info=context.error)
 
+
+def send_raw_history_to_server(history_endpoint, json_string_data):
+    """Sends the raw JSON string to the FastAPI server."""
+    if not json_string_data:
+        print("ℹ️ No JSON string data to send.")
+        return
+
+    print(f"🚀 Sending raw JSON string to {history_endpoint}...")
+
+    # Set the Content-Type header explicitly to indicate it's JSON data
+    # Even though the server treats it as raw text, this is accurate
+    headers = {'Content-Type': 'application/json; charset=utf-8'}
+
+    try:
+        # Use the 'data' parameter to send raw bytes
+        # Encode the Python string to UTF-8 bytes before sending
+        response = requests.post(
+            history_endpoint,
+            data=json_string_data.encode('utf-8'), # Crucial: encode string to bytes
+            headers=headers,
+            timeout=90 # Increase timeout for potentially large data + LLM processing
+        )
+
+        # Check the response status code
+        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+
+        print(f"✅ Success! Server responded with status code {response.status_code}.")
+        # Process the response from the server
+        try:
+            result = response.json()
+            print("📦 Server response:")
+            # Pretty print the JSON response
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        except json.JSONDecodeError:
+            print("⚠️ Server response was not valid JSON.")
+            print("Raw response text:", response.text)
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error sending request to server: {e}")
+        # More specific error details if available (e.g., connection error, timeout)
+        if response is not None:
+            print(f"Raw Response Text (if any): {response.text}")
+    except Exception as e:
+        print(f"❌ An unexpected error occurred during the request: {e}")
 
 # --- CLI Handling ---
 async def run_cli_processing(args):
