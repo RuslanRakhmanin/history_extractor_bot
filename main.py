@@ -66,8 +66,10 @@ def load_configuration():
         # admin_id_str = config['Admins']['admin_ids']
         admin_ids = {int(admin_id.strip()) for admin_id in admin_id_str.split(',') if admin_id.strip()}
         config['Internal'] = {'admin_id_set': admin_ids} # Store parsed set
-        if 'server_url' in config['Processing']:
-            config['HISTORY_ENDPOINT'] = config['Processing']['server_url'] + '/process_history'
+        # Get server_url safely with fallback to empty string
+        server_url = config.get('Processing', 'server_url', fallback='')
+        if server_url:
+            config['HISTORY_ENDPOINT'] = server_url + '/process_history'
         else:
             config['HISTORY_ENDPOINT'] = ''
 
