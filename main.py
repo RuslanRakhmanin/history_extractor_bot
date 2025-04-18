@@ -75,7 +75,7 @@ def load_configuration():
         logger.critical("Error loading or parsing config.ini: %s", e)
         sys.exit(1)
 
-    return config._sections # Return as a dictionary
+    return dict(config) # Convert configparser to dict properly
 
 CONFIG = load_configuration()
 ADMIN_IDS = CONFIG['Internal']['admin_id_set']
