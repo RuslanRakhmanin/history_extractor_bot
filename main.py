@@ -328,6 +328,10 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
                 chat_id=feedback_chat_id, text=f"An unexpected error occurred while processing chat {target_chat_id}: {e}"
             )
 
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle unknown commands by replying with an error message."""
+    if update.message and update.message.text and update.message.text.startswith('/'):
+        await update.message.reply_text(f"Unknown command: {update.message.text}. Please use /start for help.")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Log Errors caused by Updates."""
@@ -475,6 +479,10 @@ def main():
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("process_history", process_history_command))
         application.add_handler(CommandHandler("list_groupchats", list_groupchats_command))
+        
+        # Handle unknown commands
+        application.add_handler(MessageHandler(filters.COMMAND & (~filters.Regex(r'^/(start|process_history|list_groupchats)')), unknown_command))
+        
         application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.UpdateType.MESSAGE & (~filters.COMMAND), track_chats))
         application.add_handler(ChatMemberHandler(track_my_membership, ChatMemberHandler.MY_CHAT_MEMBER))
         # Add other handlers if needed (e.g., /start, /help)
