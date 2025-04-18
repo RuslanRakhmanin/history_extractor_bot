@@ -11,6 +11,8 @@ import sys
 import datetime
 from functools import wraps
 import json
+import zipfile
+
 from pathlib import Path
 import html
 import requests
@@ -53,8 +55,10 @@ def load_configuration():
         # Basic validation
         # if 'Admins' not in config or 'admin_ids' not in config['Admins']:
         #     raise ValueError("Missing [Admins] section or admin_ids in config.ini")
-        if 'Processing' not in config or 'min_reactions_for_picture' not in config['Processing']:
-            raise ValueError("Missing [Processing] section or min_reactions_for_picture in config.ini")
+        if 'Processing' not in config:
+            raise ValueError("Missing [Processing] section in config.ini")
+        if 'min_reactions_for_picture' not in config['Processing']:
+            raise ValueError("Missing min_reactions_for_picture in config.ini")
         # Add more checks as needed (paths, timezone etc)
         config['Bot'] = {'token': token} # Add token to config dict for convenience
 
@@ -62,7 +66,10 @@ def load_configuration():
         # admin_id_str = config['Admins']['admin_ids']
         admin_ids = {int(admin_id.strip()) for admin_id in admin_id_str.split(',') if admin_id.strip()}
         config['Internal'] = {'admin_id_set': admin_ids} # Store parsed set
-        config['HISTORY_ENDPOINT'] = f"{config['server_url']}/process_history"
+        if 'server_url' in config['Processing']:
+            config['HISTORY_ENDPOINT'] = config['Processing']['server_url'] + '/process_history'
+        else:
+            config['HISTORY_ENDPOINT'] = ''
 
     except Exception as e:
         logger.critical("Error loading or parsing config.ini: %s", e)
@@ -284,19 +291,19 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
 
             if zip_filepath and os.path.exists(zip_filepath):
                 try:
+                    # Send the document to the chat where the command was issued
+                    await context.bot.send_document(
+                        chat_id=feedback_chat_id, document=open(zip_filepath, 'rb')
+                    )
+
                     # Read the JSON from the zip file
-                    import zipfile
                     with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
                         with zip_ref.open('messages.json') as json_file:
                             json_data = json_file.read().decode('utf-8')
                     
                     # Send raw JSON to server
                     send_raw_history_to_server(CONFIG['HISTORY_ENDPOINT'], json_data)
-                    
-                    # Send the document to the chat where the command was issued
-                    await context.bot.send_document(
-                        chat_id=feedback_chat_id, document=open(zip_filepath, 'rb')
-                    )
+
 
                 except telegram.error.NetworkError as ne:
                     logger.error(f"Network error sending zip file {zip_filepath} to {feedback_chat_id}: {ne}")
@@ -404,6 +411,15 @@ async def run_cli_processing(args):
             print(f"- Archive created at: {zip_filepath}")
         else:
             print("- Archive creation failed or no messages processed.")
+
+            if zip_filepath and os.path.exists(zip_filepath):
+                # Read the JSON from the zip file
+                with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
+                    with zip_ref.open('messages.json') as json_file:
+                        json_data = json_file.read().decode('utf-8')
+                
+                # Send raw JSON to server
+                send_raw_history_to_server(CONFIG['HISTORY_ENDPOINT'], json_data)
 
         if popular_photos:
             print(f"- Found {len(popular_photos)} popular photos saved locally:")
