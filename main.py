@@ -284,6 +284,15 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
 
             if zip_filepath and os.path.exists(zip_filepath):
                 try:
+                    # Read the JSON from the zip file
+                    import zipfile
+                    with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
+                        with zip_ref.open('messages.json') as json_file:
+                            json_data = json_file.read().decode('utf-8')
+                    
+                    # Send raw JSON to server
+                    send_raw_history_to_server(CONFIG['HISTORY_ENDPOINT'], json_data)
+                    
                     # Send the document to the chat where the command was issued
                     await context.bot.send_document(
                         chat_id=feedback_chat_id, document=open(zip_filepath, 'rb')
