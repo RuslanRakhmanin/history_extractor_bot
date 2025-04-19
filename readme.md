@@ -62,6 +62,7 @@ A Python-based Telegram bot and CLI tool designed to process message history fro
         *   `[Processing]` -> `min_reactions_for_picture`: Set the minimum reaction count for a photo to be considered popular.
         *   `[Processing]` -> `download_dir`, `archive_dir`: Set the relative paths for saving downloaded photos and ZIP archives.
         *   `[Processing]` -> `like_emojis`: Optionally specify emojis to count as "likes" (comma-separated, e.g., `👍, ❤️`). Leave empty to count all reactions.
+        *   `[Processing]` -> `server_url`: Set the URL where the AI processing service is hosted. Use server like [gemini-to-magento-service](https://github.com/MykolaKaradzha/gemini-to-magento-service)
         *   `[History]` -> `timezone`: Set the Olson timezone string (e.g., `UTC`, `Europe/London`, `America/New_York`) to define the "day".
 
 6.  **Authorize Telethon (First Run - IMPORTANT!):**
