@@ -12,6 +12,7 @@ import datetime
 from functools import wraps
 import json
 import zipfile
+import base64
 
 from pathlib import Path
 import html
@@ -319,9 +320,14 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
                             json_data = json_file.read().decode('utf-8')
                     
                     # Send raw JSON to server
-                    send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
+                    picture_file = send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
 
-
+                    if picture_file:
+                        await context.bot.send_photo(
+                            chat_id=feedback_chat_id, photo=open(picture_file, 'rb')
+                        )
+                except FileNotFoundError:
+                    logger.error(f"File not found: {zip_filepath}")
                 except telegram.error.NetworkError as ne:
                     logger.error(f"Network error sending zip file {zip_filepath} to {feedback_chat_id}: {ne}")
                     await context.bot.send_message(chat_id=feedback_chat_id, text=f"Network error sending archive: {ne}. File saved locally.")
@@ -355,10 +361,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 def send_raw_history_to_server(history_endpoint, json_string_data):
     """Sends the raw JSON string to the FastAPI server."""
     if not json_string_data:
-        print("ℹ️ No JSON string data to send.")
+        logger.info("No JSON string data to send.")
         return
 
-    print(f"🚀 Sending raw JSON string to {history_endpoint}...")
+    logger.info(f"Sending raw JSON string to {history_endpoint}")
 
     # Set the Content-Type header explicitly to indicate it's JSON data
     # Even though the server treats it as raw text, this is accurate
@@ -377,24 +383,42 @@ def send_raw_history_to_server(history_endpoint, json_string_data):
         # Check the response status code
         response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
 
-        print(f"✅ Success! Server responded with status code {response.status_code}.")
+        logger.info(f"Success! Server responded with status code {response.status_code}")
         # Process the response from the server
         try:
             result = response.json()
-            print("📦 Server response:")
-            # Pretty print the JSON response
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            logger.info("Server response: %s", json.dumps(result, indent=2, ensure_ascii=False))
+            
+            # Extract and save image if it exists in the response
+            if 'image_base64' in result:
+                
+                # Create downloads directory if it doesn't exist
+                downloads_dir = Path(CONFIG['Processing']['download_dir'])
+                downloads_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Generate filename from name field or use timestamp
+                filename = f'image_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+                filepath = downloads_dir.joinpath(filename)
+                
+                # Decode and save the image
+                image_data = base64.b64decode(result['image_base64'])
+                with open(filepath, 'wb') as f:
+                    f.write(image_data)
+                
+                logger.info(f"Saved image to: {filepath}")
+
+                return filepath # Return the path to the saved image
+
         except json.JSONDecodeError:
-            print("⚠️ Server response was not valid JSON.")
-            print("Raw response text:", response.text)
+            logger.warning("Server response was not valid JSON. Raw response text: %s", response.text)
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error sending request to server: {e}")
+        logger.error(f"Error sending request to server: {e}")
         # More specific error details if available (e.g., connection error, timeout)
         if response is not None:
-            print(f"Raw Response Text (if any): {response.text}")
+            logger.error(f"Raw Response Text (if any): {response.text}")
     except Exception as e:
-        print(f"❌ An unexpected error occurred during the request: {e}")
+        logger.error(f"An unexpected error occurred during the request: {e}")
 
 # --- CLI Handling ---
 async def run_cli_processing(args):
