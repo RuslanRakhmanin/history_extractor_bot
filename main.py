@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (ApplicationBuilder, CommandHandler, ChatMemberHandler,
                           ContextTypes, Defaults, MessageHandler, filters)
-from telegram.constants import ChatMemberStatus
+from telegram.constants import ChatMemberStatus, ChatType
 import telegram.error # For error handling
 
 import bot_logic # Import our processing functions
@@ -131,9 +131,23 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user # User who caused the update (if applicable)
 
+    logger.info(f"Chat update in {chat.id} ('{chat.title}') by user {user.id} ({user.username}): {update.effective_message.text}")
+
     if not chat:
         return # Should not happen for messages/chat member updates
+    
+    if chat.type == ChatType.PRIVATE:
+        logger.info(f"Skipping private chat {chat.id} ('{chat.title}')")
+        if update.effective_message.text:
+            if update.effective_message.text.startswith('/'):
+                result_message = "Your message looks like a command, but it isn't a valid command for me. Maybe a link is inside the text. Please use /start for help."
+                await context.bot.send_message(chat_id=chat.id, text=result_message)
+            else:
+                result_message = "Your message isn't a valid command for me 🤷‍♂️. Please use /start for help."
+                await context.bot.send_message(chat_id=chat.id, text=result_message)
 
+        return
+    
     # Simplest: Update info on every message (can be slightly redundant)
     if chat.id not in KNOWN_CHATS or KNOWN_CHATS[chat.id]['title'] != chat.title:
         logger.info(f"Updating/adding chat {chat.id} ('{chat.title}', type: {chat.type}) to known list.")
@@ -484,6 +498,8 @@ def main():
         application.add_handler(MessageHandler(filters.COMMAND & (~filters.Regex(r'^/(start|process_history|list_groupchats)')), unknown_command))
         
         application.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.UpdateType.MESSAGE & (~filters.COMMAND), track_chats))
+        application.add_handler(MessageHandler(filters.ChatType.SUPERGROUP & filters.UpdateType.MESSAGE & (~filters.COMMAND), track_chats))
+        application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE & (~filters.COMMAND), track_chats))
         application.add_handler(ChatMemberHandler(track_my_membership, ChatMemberHandler.MY_CHAT_MEMBER))
         # Add other handlers if needed (e.g., /start, /help)
         application.add_error_handler(error_handler)
