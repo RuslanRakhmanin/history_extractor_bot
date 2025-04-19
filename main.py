@@ -326,6 +326,10 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
                         await context.bot.send_photo(
                             chat_id=feedback_chat_id, photo=open(picture_file, 'rb')
                         )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=feedback_chat_id, text="No picture file to send 🤷‍♂️."
+                        )
                 except FileNotFoundError:
                     logger.error(f"File not found: {zip_filepath}")
                 except telegram.error.NetworkError as ne:
