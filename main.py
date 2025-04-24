@@ -257,6 +257,11 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
     if args:
         # Arguments were provided
         target_chat_id = args[0]
+        try:
+            target_chat_id = int(args[0])
+        except ValueError:
+            target_chat_id = args[0]
+            
         logger.info(f"Admin {user_id} requested processing for specific chat ID: {target_chat_id}")
         await update.message.reply_text(
             f"Processing request for yesterday's history in chat ID: {target_chat_id}..."
@@ -302,7 +307,7 @@ async def process_history_command(update: Update, context: ContextTypes.DEFAULT_
                 result_message += f"- Found {len(popular_photos)} popular photos (saved locally on the server):\n"
                 result_message += "\n".join([f"  - {os.path.basename(p)}" for p in popular_photos])
             else:
-                result_message += "- No photos met the reaction criteria."
+                result_message += "- No photos in the chat history met the reaction criteria."
 
             # Send results to the chat where the command was originally issued
             await context.bot.send_message(chat_id=feedback_chat_id, text=result_message)
@@ -391,7 +396,7 @@ def send_raw_history_to_server(history_endpoint, json_string_data):
         # Process the response from the server
         try:
             result = response.json()
-            logger.info("Server response: %s", json.dumps(result, indent=2, ensure_ascii=False))
+            # logger.info("Server response: %s", json.dumps(result, indent=2, ensure_ascii=False))
             
             # Extract and save image if it exists in the response
             if 'image_base64' in result:
@@ -432,12 +437,11 @@ async def run_cli_processing(args):
         print("Error: --chat-id is required for CLI mode.", file=sys.stderr)
         sys.exit(1)
 
-    # try:
-    #     target_chat_entity = int(args.chat_id)
-    # except ValueError:
-    #     print(f"Error: Invalid chat ID '{args.chat_id}'. Must be an integer.", file=sys.stderr)
-    #     sys.exit(1)
-    target_chat_entity = args.chat_id
+    
+    try:
+        target_chat_entity = int(args.chat_id)
+    except ValueError:
+        target_chat_entity = args.chat_id
 
     target_date = None
     if args.date:

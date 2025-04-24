@@ -62,7 +62,7 @@ A Python-based Telegram bot and CLI tool designed to process message history fro
         *   `[Processing]` -> `min_reactions_for_picture`: Set the minimum reaction count for a photo to be considered popular.
         *   `[Processing]` -> `download_dir`, `archive_dir`: Set the relative paths for saving downloaded photos and ZIP archives.
         *   `[Processing]` -> `like_emojis`: Optionally specify emojis to count as "likes" (comma-separated, e.g., `👍, ❤️`). Leave empty to count all reactions.
-        *   `[Processing]` -> `server_url`: Set the URL where the AI processing service is hosted. Use server like [gemini-to-magento-service](https://github.com/MykolaKaradzha/gemini-to-magento-service)
+        *   `[Processing]` -> `server_url`: Set the URL where the AI processing service is hosted. Use a server like [gemini-to-magento-service](https://github.com/MykolaKaradzha/gemini-to-magento-service)
         *   `[History]` -> `timezone`: Set the Olson timezone string (e.g., `UTC`, `Europe/London`, `America/New_York`) to define the "day".
 
 6.  **Authorize Telethon (First Run - IMPORTANT!):**
@@ -146,6 +146,11 @@ telegram-group-processor/
 *   **User Account Permissions:** The Telegram user account configured via `API_ID`/`API_HASH` **must be a member** of any group chat you intend to process history for.
 *   **Security:** Keep your `.env` file and the generated `.session` file secure. Do not commit them to version control.
 *   **Rate Limits:** Both the Bot API and the user API (Telethon) are subject to Telegram's rate limits. Processing very active chats or running commands too frequently might result in temporary slowdowns (`FloodWaitError`). The script attempts basic handling but may need adjustments for heavy usage.
+
+## How to get chat id for a group chat
+
+1. Add the bot to the group chat. It will save chat id to the `known_chats.json` file.
+2. Open web-version of Telegram. Open the group chat you need. Find the chat id in the URL. It will be something like `-2597620761` or `group_name`. `grpoup_name` could be used as it is. `-2597620761` could be used as it is only if the chat is a groupchat. If the chat is a superchat you need to add `100` after `-` in the chat id. For example `-1002597620761`.
 
 ## Troubleshooting
 
