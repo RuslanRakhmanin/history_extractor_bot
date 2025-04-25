@@ -109,7 +109,7 @@ def load_known_chats():
         try:
             with open(KNOWN_CHATS_FILE, 'r') as f:
                 # Ensure keys are integers after loading from JSON
-                KNOWN_CHATS = {int(k): v for k, v in json.load(f).items()}
+                KNOWN_CHATS = {k: v for k, v in json.load(f).items()}
                 logger.info(f"Loaded {len(KNOWN_CHATS)} known chats from file.")
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Error loading known chats file: {e}")
@@ -433,25 +433,45 @@ def send_raw_history_to_server(history_endpoint, json_string_data):
 async def run_cli_processing(args):
     """Initializes a temporary bot instance and runs processing from CLI."""
     logger.info("Running in CLI mode.")
-    if not args.chat_id:
-        print("Error: --chat-id is required for CLI mode.", file=sys.stderr)
-        sys.exit(1)
 
-    
-    try:
-        target_chat_entity = int(args.chat_id)
-    except ValueError:
-        target_chat_entity = args.chat_id
-
-    target_date = None
-    if args.date:
-        try:
-            target_date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date()
-        except ValueError:
-            print(f"Error: Invalid date format '{args.date}'. Use YYYY-MM-DD.", file=sys.stderr)
+    if args.process_known_chats:
+        logger.info("Processing all known chats...")
+        for chat_id in KNOWN_CHATS.keys():
+            logger.info(f"Processing chat ID: {chat_id}")
+            try:
+                chat_id = int(chat_id) # Ensure chat_id is an integer
+            except ValueError:
+                pass
+            await process_history_chatid(chat_id)
+            pause = int(CONFIG['Processing']['pause_time']) # Pause between each chat processing to avoid overwhelming the LLM server
+            logger.info(f"Pausing for {pause} seconds before processing the next chat...")
+            await asyncio.sleep(pause)
+        return
+    else:
+        if not args.chat_id:
+            logger.error("Error: --chat-id is required for CLI mode.")
             sys.exit(1)
 
-    print(f"Processing history for chat ID: {target_chat_entity} on date: {target_date or 'yesterday'}")
+        
+        try:
+            target_chat_entity = int(args.chat_id)
+        except ValueError:
+            target_chat_entity = args.chat_id
+
+        target_date = None
+        if args.date:
+            try:
+                target_date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date()
+            except ValueError:
+                logger.error(f"Invalid date format '{args.date}'. Use YYYY-MM-DD.")
+                sys.exit(1)
+
+        await process_history_chatid(target_chat_entity, target_date)
+
+async def process_history_chatid(target_chat_entity, target_date=None):
+    """Processes history for a specific chat ID and date."""
+
+    logger.info(f"Processing history for chat ID: {target_chat_entity} on date: {target_date or 'yesterday'}")
     try:
         # Directly call the bot_logic function which now uses Telethon
         zip_filepath, popular_photos = await bot_logic.process_chat_history(
@@ -459,18 +479,18 @@ async def run_cli_processing(args):
         )
 
 
-        print("\nProcessing Results:")
+        logger.info("\nProcessing Results:")
         if zip_filepath:
-            print(f"- Archive created at: {zip_filepath}")
+            logger.info(f"- Archive created at: {zip_filepath}")
         else:
-            print("- Archive creation failed or no messages processed.")
+            logger.info("- Archive creation failed or no messages processed.")
 
         if popular_photos:
-            print(f"- Found {len(popular_photos)} popular photos saved locally:")
+            logger.info(f"- Found {len(popular_photos)} popular photos saved locally:")
             for photo_path in popular_photos:
-                print(f"  - {photo_path}")
+                logger.info(f"  - {photo_path}")
         else:
-            print("- No photos met the reaction criteria.")
+            logger.info("- No photos met the reaction criteria.")
 
         if zip_filepath and os.path.exists(zip_filepath):
             # Read the JSON from the zip file
@@ -483,7 +503,7 @@ async def run_cli_processing(args):
 
     except Exception as e:
         logger.exception("Error during CLI processing for chat %s: %s", target_chat_entity, e)
-        print(f"\nAn error occurred: {e}", file=sys.stderr)
+        
 
 
 def main():
@@ -503,6 +523,11 @@ def main():
         "--date",
         type=str,
         help="Target date (YYYY-MM-DD) for processing (CLI mode only, defaults to yesterday)."
+    )
+    parser.add_argument(
+        "--process-known-chats",
+        action="store_true",
+        help="Process all known chats (CLI mode only)."
     )
     args = parser.parse_args()
     load_known_chats() # Load known chats at startup

@@ -101,7 +101,7 @@ Send these commands to the bot in any chat it's in, or directly to the bot (if p
 
 ### Command-Line Interface (CLI)
 
-Run the processing directly from your terminal:
+#### Run processing of a specific chat directly from your terminal:
 
 ```bash
 python main.py --cli --chat-id <chat_id> [--date YYYY-MM-DD]
@@ -111,6 +111,17 @@ python main.py --cli --chat-id <chat_id> [--date YYYY-MM-DD]
 *   `--chat-id <chat_id>`: **Required.** Specifies the target chat ID (numeric) or group name (e.g., `-100123456789` or `group_name`).
 *   `--date <YYYY-MM-DD>`: Optional. Process history for a specific date instead of yesterday.
 
+#### Run processing of all known chats from your terminal:
+
+```bash
+python main.py --cli --process-known-chats
+```
+
+*   `--cli`: Required to run in CLI mode.
+*   `--process-known-chats`: Process history for all known chats.
+
+All known chats are loaded from the `known_chats.json` file.
+
 **Example:**
 
 ```bash
@@ -119,6 +130,9 @@ python main.py --cli --chat-id -100123456789
 
 # Process history for -100123456789 for 2023-10-26
 python main.py --cli --chat-id group_name --date 2023-10-26
+
+# Process all known chats
+python main.py --cli --process-known-chats
 ```
 
 Output (paths to archives/photos, status messages) will be printed to the console.
