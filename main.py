@@ -27,6 +27,12 @@ import telegram.error # For error handling
 
 import bot_logic # Import our processing functions
 
+# --- Dynamic Command Handler ---
+# Define the regex pattern to match commands starting with /process_history_
+# (\w+) captures one or more alphanumeric characters (and underscore) as group 1
+# ^ anchors to the start, $ anchors to the end (important for commands)
+PROCESS_HISTORY_PATTERN = r'^/process_history_(\w+)$'
+
 # --- Logging Setup ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -199,13 +205,22 @@ async def list_groupchats_command(update: Update, context: ContextTypes.DEFAULT_
         chat_type = info.get('type', '?')
 
         # Create the command string for this chat
-        command_string = f"/process_history {chat_id}"
+        if chat_id[0] == '-':
+            command_string = f"/process_history__minus_{chat_id[1:]}"
+        else:
+            command_string = f"/process_history_{chat_id}"
+
+        # # Format the line using HTML. <code> makes it easy to click/copy.
+        # line = (
+        #     f"- {title} (ID: <code>{chat_id}</code>, Type: {chat_type})\n"
+        #     f"  └ Run Process: <code>{command_string}</code>"
+        # )
 
         # Format the line using HTML. <code> makes it easy to click/copy.
         line = (
-            f"- {title} (ID: <code>{chat_id}</code>, Type: {chat_type})\n"
-            f"  └ Run Process: <code>{command_string}</code>"
-        )
+            f"- {title} (ID: {chat_id}, Type: {chat_type})\n"
+            f"  └ Run Process: {command_string}"
+        )        
         message_lines.append(line)
 
     full_message = "\n".join(message_lines)
@@ -218,7 +233,8 @@ async def list_groupchats_command(update: Update, context: ContextTypes.DEFAULT_
         full_message = full_message[:cutoff_point] + "\n\n<b>... (list truncated due to length)</b>"
 
     # Send the message using HTML parse mode
-    await update.message.reply_text(full_message, parse_mode='HTML')
+    # await update.message.reply_text(full_message, parse_mode='HTML')
+    await update.message.reply_text(full_message)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when the command /start is issued."""
@@ -366,6 +382,37 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Log Errors caused by Updates."""
     logger.error("Update %s caused error %s", update, context.error, exc_info=context.error)
 
+@admin_only
+async def process_history_dynamic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles commands like /process_history_xyz
+    Handles the /process_history_xyz command.
+    Processes history for a specific chat ID provided as a part of the command.
+
+    Usage:
+    /process_history_<target_chat_id_or_name>
+    /process_history_<target_chat_id_or_name>_<date>    
+    """
+    message_text = update.message.text
+    logger.info(f"Received dynamic command attempt: {message_text}")
+
+    # The regex match object is often stored in context.matches by the Regex filter
+    # context.matches is a list of match objects, one for each filter that matched.
+    # We expect our Regex filter's match object.
+    match = context.matches[0] # Assuming the Regex filter is the first or only one providing matches
+
+    if match:
+        dynamic_part = match.group(1) # Extract the part captured by (\w+)
+        logger.info(f"Extracted dynamic part: {dynamic_part}")
+        dynamic_part = dynamic_part.replace('_minus_', '-') # Handle the special case for negative IDs
+        await update.message.reply_text(f'Processing history for identifier: {dynamic_part}')
+        if not context.args:
+            context.args = []
+        context.args.insert(0, dynamic_part) # Insert the dynamic part as the first argument
+        await process_history_command(update, context) # Call the command handler directly
+    else:
+        # This part should technically not be reached if the filter works correctly
+        logger.warning("Dynamic handler called but no regex match found in context.")
+        await update.message.reply_text("Something went wrong processing the dynamic command.")
 
 def send_raw_history_to_server(history_endpoint, json_string_data):
     """Sends the raw JSON string to the FastAPI server."""
@@ -374,7 +421,7 @@ def send_raw_history_to_server(history_endpoint, json_string_data):
         return
 
     logger.info(f"Sending raw JSON string to {history_endpoint}")
-
+    response = None
     # Set the Content-Type header explicitly to indicate it's JSON data
     # Even though the server treats it as raw text, this is accurate
     headers = {'Content-Type': 'application/json; charset=utf-8'}
@@ -422,7 +469,7 @@ def send_raw_history_to_server(history_endpoint, json_string_data):
             logger.warning("Server response was not valid JSON. Raw response text: %s", response.text)
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error sending request to server: {e}")
+        logger.error(f"Error sending request to the history processing server: {e}")
         # More specific error details if available (e.g., connection error, timeout)
         if response is not None:
             logger.error(f"Raw Response Text (if any): {response.text}")
@@ -555,6 +602,12 @@ def main():
         application.add_handler(CommandHandler("process_history", process_history_command))
         application.add_handler(CommandHandler("list_groupchats", list_groupchats_command))
         
+        # Dynamic command handler using MessageHandler and Regex filter
+        # It filters for COMMAND type messages that ALSO match the regex pattern
+        application.add_handler(MessageHandler(
+            filters.COMMAND & filters.Regex(PROCESS_HISTORY_PATTERN),
+            process_history_dynamic
+        ))        
         # Handle unknown commands
         application.add_handler(MessageHandler(filters.COMMAND & (~filters.Regex(r'^/(start|process_history|list_groupchats)')), unknown_command))
         
