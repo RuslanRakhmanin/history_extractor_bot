@@ -442,10 +442,11 @@ async def run_cli_processing(args):
                 chat_id = int(chat_id) # Ensure chat_id is an integer
             except ValueError:
                 pass
-            await process_history_chatid(chat_id)
-            pause = int(CONFIG['Processing']['pause_time']) # Pause between each chat processing to avoid overwhelming the LLM server
-            logger.info(f"Pausing for {pause} seconds before processing the next chat...")
-            await asyncio.sleep(pause)
+            history_found_and_processed = await process_history_chatid(chat_id)
+            if history_found_and_processed:
+                pause = int(CONFIG['Processing']['pause_time']) # Pause between each chat processing to avoid overwhelming the LLM server
+                logger.info(f"Pausing for {pause} seconds before processing the next chat...")
+                await asyncio.sleep(pause)
         return
     else:
         if not args.chat_id:
@@ -500,6 +501,9 @@ async def process_history_chatid(target_chat_entity, target_date=None):
             
             # Send raw JSON to server
             send_raw_history_to_server(HISTORY_ENDPOINT, json_data)
+            return True # Successfully processed and sent to server
+        else:
+            return False # No zip file created or not found
 
     except Exception as e:
         logger.exception("Error during CLI processing for chat %s: %s", target_chat_entity, e)
