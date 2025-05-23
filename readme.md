@@ -133,6 +133,9 @@ python main.py --cli --chat-id group_name --date 2023-10-26
 
 # Process all known chats
 python main.py --cli --process-known-chats
+
+# Process all known chats for 2023-10-26
+python main.py --cli --process-known-chats --date 2023-10-26
 ```
 
 Output (paths to archives/photos, status messages) will be printed to the console.

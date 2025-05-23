@@ -483,14 +483,23 @@ async def run_cli_processing(args):
 
     if args.process_known_chats:
         logger.info("Processing all known chats...")
+
+        target_date = None
+        if args.date:
+            try:
+                target_date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date()
+            except ValueError:
+                logger.error(f"Invalid date format '{args.date}'. Use YYYY-MM-DD.")
+                sys.exit(1)
+
         for chat_id in KNOWN_CHATS.keys():
             logger.info(f"Processing chat ID: {chat_id}")
             try:
                 chat_id = int(chat_id) # Ensure chat_id is an integer
             except ValueError:
                 pass
-            history_found_and_processed = await process_history_chatid(chat_id)
-            if history_found_and_processed:
+            history_found_and_processed = await process_history_chatid(chat_id, target_date)
+            if history_found_and_processed and chat_id != list(KNOWN_CHATS.keys())[-1]:
                 pause = int(CONFIG['Processing']['pause_time']) # Pause between each chat processing to avoid overwhelming the LLM server
                 logger.info(f"Pausing for {pause} seconds before processing the next chat...")
                 await asyncio.sleep(pause)
